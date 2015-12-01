@@ -9,6 +9,9 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <signal.h>
+#include <pthread.h>
+#include "dict.h"
+#include "dict.c"
 
 struct addrinfo* getAvilableAddresses(struct addrinfo* hints, char* port){
   struct addrinfo* addresses; 
@@ -63,7 +66,7 @@ int addToEpoll(int epollfd, int socketfd){
   }
 }
 
-int acceptConnection(int epollfd, int socketfd){
+int acceptConnection(int epollfd, int socketfd, Dict login, Dict fLogin){
   struct sockaddr addr;
   socklen_t addrlen = sizeof addr;
 
@@ -90,12 +93,54 @@ int acceptConnection(int epollfd, int socketfd){
     fprintf(stderr, "failed to add socket %d to epoll", connectionfd);
     return -1;
   }
+  dprintf(connectionfd,"Enter login: ");
+  
+  char conBuf[4];
+  snprintf(conBuf, 4,"%d",connectionfd);
+  DictInsert(login, conBuf, "");
+
+  snprintf(conBuf, 4,"%d",connectionfd);
+  DictInsert(fLogin, conBuf, "0");
   return 0;  
 }
+int checkLogin(const char *login, char * password){
+  printf("%s\n", login);
+  printf("%s\n", password);
+  FILE *mf;
+  char *estr;
+  char str[50];
+  mf = fopen("registr","r");
+  while(1)
+  {
 
-int handlerRequest(int epollfd, int connectionfd){
+    estr = fgets(str,50,mf);
+    if (estr == NULL)
+      break;
+    printf("%s\n", estr);
+    printf("%s\n", login);
+  
+    if (!strcmp(str, login)){
+      fclose(mf);
+      return 1;
+    }
+
+    estr = fgets(str,50,mf);
+    printf("%s\n", estr);
+    printf("%s\n", password);
+
+    if (!strcmp(str, password)){
+      fclose(mf);
+      return 1;
+    }
+
+  }
+  fclose(mf);
+  return 0;
+}
+int handlerRequest(int epollfd, int connectionfd, Dict login, Dict fLogin){
 
   char buffer[1024];
+  char conBuf[4];
   ssize_t count = read(connectionfd, buffer, sizeof buffer);
   switch(count){
     case -1:
@@ -106,23 +151,77 @@ int handlerRequest(int epollfd, int connectionfd){
       printf("client closed the connection");
       break;
     default:
-      printf("user message: %.*s", count, buffer); // Выводим сообщение
-      dprintf(connectionfd, "Hello, %.*s", count, buffer);
+      snprintf(conBuf, 4,"%d",connectionfd);
+      printf("->%s\n", DictSearch(fLogin, conBuf));
+      if(!strcmp(DictSearch(login, conBuf),"")){
+        printf("->%d\n", count);
+        if (count > 1){
+          char *tmpLogin = (char*) malloc(count+1);
+          strncpy(tmpLogin, buffer, count);
+          tmpLogin[count] = '\0';
+          DictInsert(login,conBuf,tmpLogin);
+
+          printf("!!!%s!!!\n", DictSearch(login, conBuf));
+          dprintf(connectionfd, "Enter password: ");
+        }
+        else
+          dprintf(connectionfd,"Enter login: ");
+      }
+      else{
+        if (!strcmp(DictSearch(fLogin, conBuf),"0")){
+          char *tmpPass=(char*) malloc(count+1); 
+          strncpy(tmpPass, buffer, count);
+          tmpPass[count] = '\0';
+          int check = checkLogin(DictSearch(login, conBuf), tmpPass);
+          if(check == 1){
+            DictDelete(fLogin,conBuf);
+            DictInsert(fLogin,conBuf,"1");
+            dprintf(connectionfd, "!!Enter command: ");
+          }
+          else{
+            DictDelete(login,conBuf);
+            DictInsert(login,conBuf,"");
+            dprintf(connectionfd,"Enter login: ");
+          }
+        }
+        else{
+          if(!strncmp(buffer, "logout",6))
+            close(connectionfd);
+          else{
+          int c;
+          FILE *pp;
+          extern FILE *popen();
+ 
+          if ( !(pp=popen(buffer, "r")) ) 
+            return 1;
+ 
+          while ( (c=fgetc(pp)) != EOF ) {
+          putc(c, stdout); 
+          dprintf(connectionfd,"%c",c);
+          fflush(pp);
+          }   
+          pclose(pp);
+
+          printf("%d user message: %.*s", connectionfd, count, buffer); 
+          dprintf(connectionfd, "Enter command: ");
+        }
+        }
+      }
   }
   printf("connection %d closed\n", connectionfd);
   close(connectionfd);
 }
 
-int handleEvent(struct epoll_event* event, int epollfd, int socketfd){
+int handleEvent(struct epoll_event* event, int epollfd, int socketfd, Dict login, Dict fLogin){
   if ((event->events & EPOLLERR) || (event->events & EPOLLHUP)){
     printf("impossible to handle event\n");
     close(event->data.fd);
     return -1;
   }
   return socketfd == event->data.fd ?
-         acceptConnection(epollfd, socketfd) : 
+         acceptConnection(epollfd, socketfd, login, fLogin) : 
 
-         handlerRequest(epollfd, event->data.fd);
+         handlerRequest(epollfd, event->data.fd, login, fLogin);
 
 }
 
@@ -134,6 +233,13 @@ void handleSignal(int signum){
 
 int main (int argc, char *argv[]){
 
+  Dict login;
+
+  login = DictCreate();
+
+  Dict fLogin;
+
+  fLogin = DictCreate();
   printf("starting server\n");
   struct addrinfo hints; 
   memset(&hints, 0, sizeof hints);
@@ -193,8 +299,7 @@ int main (int argc, char *argv[]){
     if (eventsNumber == 0) 
       printf("no events\n");
     for (int i = 0; i < eventsNumber; ++i) {
-      printf("handling event %d of %d\n", i + 1, eventsNumber);
-      handleEvent(events + i, epollfd, socketfd);
+      handleEvent(events + i, epollfd, socketfd, login, fLogin);
     }
   }
   
