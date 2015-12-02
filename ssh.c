@@ -13,6 +13,20 @@
 #include "dict.h"
 #include "dict.c"
 
+#define WORKING_THREADS_COUNT 5
+
+struct Params{
+  pthread_mutex_t mutex;
+  pthread_cond_t condvar;
+  int currrent;
+  int end;
+  struct epoll_event* events;
+  int epollfd;
+  int socketfd;
+  Dict login;
+  Dict fLogin;
+};
+
 struct addrinfo* getAvilableAddresses(struct addrinfo* hints, char* port){
   struct addrinfo* addresses; 
   int status = getaddrinfo(NULL, port, hints, &addresses);
@@ -231,6 +245,38 @@ void handleSignal(int signum){
   done = 1;
 }
 
+void* workThread(void* p){
+  struct Params* params = (struct Params*) p;
+  printf("Wait");
+  pthread_mutex_lock(&params->mutex);
+  pthread_cond_wait(&params->condvar,&params->mutex);
+  pthread_mutex_unlock(&params->mutex);
+  printf("Hi");
+  int cur = malloc(sizeof(int));
+  while(!done)
+  {
+    
+    int flag = 0;
+    pthread_mutex_lock(&params->mutex);
+    if(params->currrent < params->end){
+      cur = params->currrent;
+      params->currrent++;
+      flag = 1;
+    } 
+    else{
+      pthread_cond_wait(&params->condvar,&params->mutex);
+    }
+    pthread_mutex_unlock(&params->mutex);
+    if(flag){
+    printf("handling event %d of %d\n", params->currrent, params->end);
+    printf("%d\n",cur );
+    handleEvent(params->events+cur, params->epollfd, params->socketfd, params->login, params->fLogin);
+    }//int eventsNumber = epoll_wait(epollfd, events, maxEventNum, -1);
+   //handleEvent(params);
+  }
+
+}
+
 int main (int argc, char *argv[]){
 
   Dict login;
@@ -290,16 +336,31 @@ int main (int argc, char *argv[]){
 
   int maxEventNum = 8;
   struct epoll_event events[maxEventNum * sizeof(struct epoll_event)];
-  
+   struct Params params;
+  pthread_mutex_init(&params.mutex, NULL);
+  pthread_cond_init(&params.condvar, NULL); 
+  params.end = 0;
+  params.currrent = 0;
+  params.epollfd = epollfd;
+  params.events = events;
+  params.socketfd = socketfd;
+  params.login = login;
+  params.fLogin = fLogin;
+  pthread_t working[WORKING_THREADS_COUNT]; 
+  for(int i = 0; i<WORKING_THREADS_COUNT; i++){   
+    pthread_create(&working[i], NULL, workThread, &params);
+  } 
 
   int timeout = -1 ;
   while(!done){
-    printf("waiting new events\n");
-    int eventsNumber = epoll_wait(epollfd, events, maxEventNum, timeout);
-    if (eventsNumber == 0) 
-      printf("no events\n");
-    for (int i = 0; i < eventsNumber; ++i) {
-      handleEvent(events + i, epollfd, socketfd, login, fLogin);
+
+    if(params.currrent >= params.end){
+      printf("waiting new events\n");
+      int eventsNumber = epoll_wait(epollfd, events, maxEventNum, timeout);
+      params.currrent = 0;
+      params.end = eventsNumber;
+      printf("Send\n");
+      pthread_cond_signal(&params.condvar); 
     }
   }
   
