@@ -183,18 +183,14 @@ int handlerRequest(int epollfd, int connectionfd, struct UserParams userParams, 
     case -1:
       if (errno != EAGAIN)
         perror ("failed to read data");
-      free(buffer);
       break;
     case 0:
       printf("client closed the connection");
-      free(buffer);
       break;
     default:
       snprintf(conBuf, 4,"%d",connectionfd);
-      printf("->%s\n", DictSearch(userParams.fLogin, conBuf));
       //ввод логина
       if(!strcmp(DictSearch(userParams.login, conBuf),"")){
-        printf("->%d\n", count);
         if (count > 1){
           char *tmpLogin = (char*) malloc(count+1);
           strncpy(tmpLogin, buffer, count);
@@ -220,7 +216,7 @@ int handlerRequest(int epollfd, int connectionfd, struct UserParams userParams, 
           if(check == 1){
             DictDelete(userParams.fLogin,conBuf);
             DictInsert(userParams.fLogin,conBuf,"1");
-            DictInsert(userParams.location,conBuf," /home/anatoly/Ssh/user_root/");
+            DictInsert(userParams.location,conBuf,"cd user_root/;");
             dprintf(connectionfd, "!!Enter command: ");
           }
           else{
@@ -237,17 +233,22 @@ int handlerRequest(int epollfd, int connectionfd, struct UserParams userParams, 
           int c;
           FILE *pp;
           extern FILE *popen();
-          
-          if ( !(pp=popen(buffer, "r")) ) 
+          char* tempCd = (char*) malloc(1024*sizeof(char));
+          strcpy(tempCd, DictSearch(userParams.location, conBuf));
+          //strcat(tempCd, ";");
+          printf("----->%s\n",tempCd);
+          if ( !(pp=popen(strcat(tempCd, buffer), "r")) ){
+             free(tempCd);
             return 1;
- 
+          }
+          
           while ( (c=fgetc(pp)) != EOF ) {
           putc(c, stdout); 
           dprintf(connectionfd,"%c",c);
           fflush(pp);
           }   
           pclose(pp);
-
+          free(tempCd);
           printf("%d user command: %.*s", connectionfd, count, buffer); 
           dprintf(connectionfd, "Enter command: ");
         }
@@ -311,6 +312,18 @@ void* workThread(void* p){
 }
 
 int main (int argc, char *argv[]){
+          /*int c;
+          FILE *pp;
+          extern FILE *popen();
+          if ( !(pp=popen("ls -l", "r")) ) 
+            return 1;
+ 
+          while ( (c=fgetc(pp)) != EOF ) {
+          putc(c, stdout); 
+          fflush(pp);
+          }   
+          pclose(pp);*/
+
   //пользовательскике данные
   struct UserParams userParams;
   Dict login = DictCreate();
