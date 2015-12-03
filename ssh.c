@@ -15,12 +15,13 @@
 
 #define WORKING_THREADS_COUNT 5
 
+//стуктура с пользовательскими данными
 struct UserParams{
   Dict login;
   Dict fLogin;
   Dict location;
 };
-
+//стуктура с параметрами потоков
 struct Params{
   pthread_mutex_t mutex;
   pthread_cond_t condvar;
@@ -68,6 +69,7 @@ int assignSocket(struct addrinfo* addresses){
   return -1;
 }
 
+//делаем сокет не блокируемым
 int setNonBlock(int socketfd){
   int flags = fcntl(socketfd, F_GETFL, 0);
   if (fcntl(socketfd, F_SETFL, flags | O_NONBLOCK)){
@@ -77,6 +79,7 @@ int setNonBlock(int socketfd){
   return 0;
 }
 
+// добавление сокета в epoll для отслеживания событий
 int addToEpoll(int epollfd, int socketfd){
   struct epoll_event event;
   event.data.fd = socketfd;
@@ -87,6 +90,7 @@ int addToEpoll(int epollfd, int socketfd){
   }
 }
 
+// прием соединения, если новых соединений нет или произошла ошибка то connectionfd == -1 
 int acceptConnection(int epollfd, int socketfd, struct UserParams userParams){
   struct sockaddr addr;
   socklen_t addrlen = sizeof addr;
@@ -100,8 +104,9 @@ int acceptConnection(int epollfd, int socketfd, struct UserParams userParams){
   char host[NI_MAXHOST]; 
   char service[NI_MAXSERV]; 
 
+  //резервирование символьного адреса и имени сервиса
   if(!getnameinfo(&addr, addrlen, host, sizeof host, service, sizeof service, NI_NUMERICHOST | NI_NUMERICSERV)){
-
+  //вывод информации о полльзователе
     printf("new connection: %s:%s\n", host, service);
   }
 
@@ -109,13 +114,13 @@ int acceptConnection(int epollfd, int socketfd, struct UserParams userParams){
     fprintf(stderr, "failed to set socket %d nonblock", connectionfd);
     return -1;
   }
-
+  //добавление в epol
   if (addToEpoll(epollfd, connectionfd) == -1){
     fprintf(stderr, "failed to add socket %d to epoll", connectionfd);
     return -1;
   }
   dprintf(connectionfd,"Enter login: ");
-  
+  //добавление пользователя в структуру
   char conBuf[4];
   snprintf(conBuf, 4,"%d",connectionfd);
   DictInsert(userParams.login, conBuf, "");
@@ -124,6 +129,7 @@ int acceptConnection(int epollfd, int socketfd, struct UserParams userParams){
   DictInsert(userParams.fLogin, conBuf, "0");
   return 0;  
 }
+//проверка введенных пользовательских данных
 int checkLogin(const char *login, char * password){
   printf("%s\n", login);
   printf("%s\n", password);
@@ -131,14 +137,10 @@ int checkLogin(const char *login, char * password){
   char *estr;
   char str[50];
   mf = fopen("registr","r");
-  while(1)
-  {
-
+  while(1) {
     estr = fgets(str,50,mf);
     if (estr == NULL)
       break;
-    printf("%s\n", estr);
-    printf("%s\n", login);
   
     if (!strcmp(str, login)){
       fclose(mf);
@@ -146,18 +148,16 @@ int checkLogin(const char *login, char * password){
     }
 
     estr = fgets(str,50,mf);
-    printf("%s\n", estr);
-    printf("%s\n", password);
 
     if (!strcmp(str, password)){
       fclose(mf);
       return 1;
     }
-
   }
   fclose(mf);
   return 0;
 }
+//чтение данных, присланных пользователем
 int handlerRequest(int epollfd, int connectionfd, struct UserParams userParams, pthread_mutex_t mutex){
 
   char buffer[1024];
@@ -174,6 +174,7 @@ int handlerRequest(int epollfd, int connectionfd, struct UserParams userParams, 
     default:
       snprintf(conBuf, 4,"%d",connectionfd);
       printf("->%s\n", DictSearch(userParams.fLogin, conBuf));
+      //ввод логина
       if(!strcmp(DictSearch(userParams.login, conBuf),"")){
         printf("->%d\n", count);
         if (count > 1){
@@ -182,23 +183,26 @@ int handlerRequest(int epollfd, int connectionfd, struct UserParams userParams, 
           tmpLogin[count] = '\0';
           DictInsert(userParams.login,conBuf,tmpLogin);
 
-          printf("!!!%s!!!\n", DictSearch(userParams.login, conBuf));
+          printf("%s\n", DictSearch(userParams.login, conBuf));
           dprintf(connectionfd, "Enter password: ");
         }
         else
           dprintf(connectionfd,"Enter login: ");
       }
       else{
+        //ввод пароля
         if (!strcmp(DictSearch(userParams.fLogin, conBuf),"0")){
           char *tmpPass=(char*) malloc(count+1); 
           strncpy(tmpPass, buffer, count);
           tmpPass[count] = '\0';
+          //вызов проверки
           pthread_mutex_lock(&mutex);
           int check = checkLogin(DictSearch(userParams.login, conBuf), tmpPass);
           pthread_mutex_unlock(&mutex);
           if(check == 1){
             DictDelete(userParams.fLogin,conBuf);
             DictInsert(userParams.fLogin,conBuf,"1");
+            DictInsert(userParams.location,conBuf," /home/anatoly/Ssh/user_root/");
             dprintf(connectionfd, "!!Enter command: ");
           }
           else{
@@ -208,14 +212,15 @@ int handlerRequest(int epollfd, int connectionfd, struct UserParams userParams, 
           }
         }
         else{
+          //обработка комманд, присланных пользователем
           if(!strncmp(buffer, "logout",6))
             close(connectionfd);
           else{
           int c;
           FILE *pp;
           extern FILE *popen();
- 
-          if ( !(pp=popen(buffer, "r")) ) 
+          
+          if ( !(pp=popen(strcat(buffer, DictSearch(userParams.location, conBuf)), "r")) ) 
             return 1;
  
           while ( (c=fgetc(pp)) != EOF ) {
@@ -232,7 +237,7 @@ int handlerRequest(int epollfd, int connectionfd, struct UserParams userParams, 
       }
   }
 }
-
+//обработка события на сокете
 int handleEvent(struct epoll_event* event, int epollfd, int socketfd, struct UserParams userParams, pthread_mutex_t mutex){
   if ((event->events & EPOLLERR) || (event->events & EPOLLHUP)){
     printf("impossible to handle event\n");
@@ -240,9 +245,10 @@ int handleEvent(struct epoll_event* event, int epollfd, int socketfd, struct Use
     return -1;
   }
   return socketfd == event->data.fd ?
-         acceptConnection(epollfd, socketfd, userParams) : 
-
-         handlerRequest(epollfd, event->data.fd, userParams, mutex);
+        // событие на серверном сокете
+        acceptConnection(epollfd, socketfd, userParams) : 
+        // событие на сокете соединения
+        handlerRequest(epollfd, event->data.fd, userParams, mutex);
 
 }
 
@@ -251,7 +257,7 @@ volatile sig_atomic_t done = 0;
 void handleSignal(int signum){
   done = 1;
 }
-
+//обработка событий потоком
 void* workThread(void* p){
   struct Params* params = (struct Params*) p;
   printf("Wait");
@@ -271,6 +277,7 @@ void* workThread(void* p){
       flag = 1;
     } 
     else{
+      //если нет новых событий
       pthread_cond_wait(&params->condvar,&params->mutex);
     }
     pthread_mutex_unlock(&params->mutex);
@@ -284,18 +291,7 @@ void* workThread(void* p){
 }
 
 int main (int argc, char *argv[]){
-          /*int c;
-          FILE *pp;
-          extern FILE *popen();
-          if ( !(pp=popen("ls -l /bin", "r")) ) 
-            return 1;
- 
-          while ( (c=fgetc(pp)) != EOF ) {
-          putc(c, stdout);  
-          fflush(pp);
-          }   
-          pclose(pp);*/
-
+  //пользовательскике данные
   struct UserParams userParams;
   Dict login = DictCreate();
   Dict fLogin = DictCreate();
@@ -304,6 +300,7 @@ int main (int argc, char *argv[]){
   userParams.fLogin = fLogin;
   userParams.location = location;
 
+  //параметры адреса
   printf("starting server\n");
   struct addrinfo hints; 
   memset(&hints, 0, sizeof hints);
@@ -312,13 +309,13 @@ int main (int argc, char *argv[]){
   hints.ai_socktype = SOCK_STREAM; 
   hints.ai_protocol = IPPROTO_TCP; 
   
-
+  // получаение списка доступных адресов
   char* port = "8080";
   struct addrinfo* addresses = getAvilableAddresses(&hints, port); 
   if(!addresses)
     return EXIT_FAILURE;
   
-
+  //коннект сокета
   int socketfd = assignSocket(addresses);
   if(!socketfd)
     return EXIT_FAILURE;
@@ -336,7 +333,7 @@ int main (int argc, char *argv[]){
   }
   printf("listening port %s\n", port);
   
-
+  //создание epoll
   int epollfd = epoll_create1(0);
   if (epollfd == -1){
     perror ("epoll_create");
@@ -347,14 +344,12 @@ int main (int argc, char *argv[]){
   if (addToEpoll(epollfd, socketfd) == -1)
     return EXIT_FAILURE;
   
-
+  //регистрация обработчика событий
   signal(SIGINT, handleSignal);
     
-    
-
   int maxEventNum = 8;
   struct epoll_event events[maxEventNum * sizeof(struct epoll_event)];
-  
+  //заполнение параметров для потоков
   struct Params params;
   pthread_mutex_init(&params.mutex, NULL);
   pthread_cond_init(&params.condvar, NULL); 
@@ -369,9 +364,9 @@ int main (int argc, char *argv[]){
     pthread_create(&working[i], NULL, workThread, &params);
   } 
 
+  //обработка событий
   int timeout = -1 ;
   while(!done){
-
     if(params.currrent >= params.end){
       printf("waiting new events\n");
       int eventsNumber = epoll_wait(epollfd, events, maxEventNum, timeout);
