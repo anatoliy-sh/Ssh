@@ -15,6 +15,12 @@
 
 #define WORKING_THREADS_COUNT 5
 
+struct UserParams{
+  Dict login;
+  Dict fLogin;
+  Dict location;
+};
+
 struct Params{
   pthread_mutex_t mutex;
   pthread_cond_t condvar;
@@ -23,9 +29,10 @@ struct Params{
   struct epoll_event* events;
   int epollfd;
   int socketfd;
-  Dict login;
-  Dict fLogin;
+  struct UserParams userParams;
 };
+
+
 
 struct addrinfo* getAvilableAddresses(struct addrinfo* hints, char* port){
   struct addrinfo* addresses; 
@@ -80,7 +87,7 @@ int addToEpoll(int epollfd, int socketfd){
   }
 }
 
-int acceptConnection(int epollfd, int socketfd, Dict login, Dict fLogin){
+int acceptConnection(int epollfd, int socketfd, struct UserParams userParams){
   struct sockaddr addr;
   socklen_t addrlen = sizeof addr;
 
@@ -111,10 +118,10 @@ int acceptConnection(int epollfd, int socketfd, Dict login, Dict fLogin){
   
   char conBuf[4];
   snprintf(conBuf, 4,"%d",connectionfd);
-  DictInsert(login, conBuf, "");
+  DictInsert(userParams.login, conBuf, "");
 
   snprintf(conBuf, 4,"%d",connectionfd);
-  DictInsert(fLogin, conBuf, "0");
+  DictInsert(userParams.fLogin, conBuf, "0");
   return 0;  
 }
 int checkLogin(const char *login, char * password){
@@ -151,7 +158,7 @@ int checkLogin(const char *login, char * password){
   fclose(mf);
   return 0;
 }
-int handlerRequest(int epollfd, int connectionfd, Dict login, Dict fLogin, pthread_mutex_t mutex){
+int handlerRequest(int epollfd, int connectionfd, struct UserParams userParams, pthread_mutex_t mutex){
 
   char buffer[1024];
   char conBuf[4];
@@ -166,37 +173,37 @@ int handlerRequest(int epollfd, int connectionfd, Dict login, Dict fLogin, pthre
       break;
     default:
       snprintf(conBuf, 4,"%d",connectionfd);
-      printf("->%s\n", DictSearch(fLogin, conBuf));
-      if(!strcmp(DictSearch(login, conBuf),"")){
+      printf("->%s\n", DictSearch(userParams.fLogin, conBuf));
+      if(!strcmp(DictSearch(userParams.login, conBuf),"")){
         printf("->%d\n", count);
         if (count > 1){
           char *tmpLogin = (char*) malloc(count+1);
           strncpy(tmpLogin, buffer, count);
           tmpLogin[count] = '\0';
-          DictInsert(login,conBuf,tmpLogin);
+          DictInsert(userParams.login,conBuf,tmpLogin);
 
-          printf("!!!%s!!!\n", DictSearch(login, conBuf));
+          printf("!!!%s!!!\n", DictSearch(userParams.login, conBuf));
           dprintf(connectionfd, "Enter password: ");
         }
         else
           dprintf(connectionfd,"Enter login: ");
       }
       else{
-        if (!strcmp(DictSearch(fLogin, conBuf),"0")){
+        if (!strcmp(DictSearch(userParams.fLogin, conBuf),"0")){
           char *tmpPass=(char*) malloc(count+1); 
           strncpy(tmpPass, buffer, count);
           tmpPass[count] = '\0';
           pthread_mutex_lock(&mutex);
-          int check = checkLogin(DictSearch(login, conBuf), tmpPass);
+          int check = checkLogin(DictSearch(userParams.login, conBuf), tmpPass);
           pthread_mutex_unlock(&mutex);
           if(check == 1){
-            DictDelete(fLogin,conBuf);
-            DictInsert(fLogin,conBuf,"1");
+            DictDelete(userParams.fLogin,conBuf);
+            DictInsert(userParams.fLogin,conBuf,"1");
             dprintf(connectionfd, "!!Enter command: ");
           }
           else{
-            DictDelete(login,conBuf);
-            DictInsert(login,conBuf,"");
+            DictDelete(userParams.login,conBuf);
+            DictInsert(userParams.login,conBuf,"");
             dprintf(connectionfd,"Enter login: ");
           }
         }
@@ -226,16 +233,16 @@ int handlerRequest(int epollfd, int connectionfd, Dict login, Dict fLogin, pthre
   }
 }
 
-int handleEvent(struct epoll_event* event, int epollfd, int socketfd, Dict login, Dict fLogin, pthread_mutex_t mutex){
+int handleEvent(struct epoll_event* event, int epollfd, int socketfd, struct UserParams userParams, pthread_mutex_t mutex){
   if ((event->events & EPOLLERR) || (event->events & EPOLLHUP)){
     printf("impossible to handle event\n");
     close(event->data.fd);
     return -1;
   }
   return socketfd == event->data.fd ?
-         acceptConnection(epollfd, socketfd, login, fLogin) : 
+         acceptConnection(epollfd, socketfd, userParams) : 
 
-         handlerRequest(epollfd, event->data.fd, login, fLogin, mutex);
+         handlerRequest(epollfd, event->data.fd, userParams, mutex);
 
 }
 
@@ -270,21 +277,33 @@ void* workThread(void* p){
     if(flag){
     printf("handling event %d of %d\n", params->currrent, params->end);
     printf("%d\n",cur );
-    handleEvent(params->events+cur, params->epollfd, params->socketfd, params->login, params->fLogin, params->mutex);
+    handleEvent(params->events+cur, params->epollfd, params->socketfd, params->userParams, params->mutex);
     }
   }
 
 }
 
 int main (int argc, char *argv[]){
+          /*int c;
+          FILE *pp;
+          extern FILE *popen();
+          if ( !(pp=popen("ls -l /bin", "r")) ) 
+            return 1;
+ 
+          while ( (c=fgetc(pp)) != EOF ) {
+          putc(c, stdout);  
+          fflush(pp);
+          }   
+          pclose(pp);*/
 
-  Dict login;
+  struct UserParams userParams;
+  Dict login = DictCreate();
+  Dict fLogin = DictCreate();
+  Dict location = DictCreate();;
+  userParams.login = login;
+  userParams.fLogin = fLogin;
+  userParams.location = location;
 
-  login = DictCreate();
-
-  Dict fLogin;
-
-  fLogin = DictCreate();
   printf("starting server\n");
   struct addrinfo hints; 
   memset(&hints, 0, sizeof hints);
@@ -335,7 +354,8 @@ int main (int argc, char *argv[]){
 
   int maxEventNum = 8;
   struct epoll_event events[maxEventNum * sizeof(struct epoll_event)];
-   struct Params params;
+  
+  struct Params params;
   pthread_mutex_init(&params.mutex, NULL);
   pthread_cond_init(&params.condvar, NULL); 
   params.end = 0;
@@ -343,8 +363,7 @@ int main (int argc, char *argv[]){
   params.epollfd = epollfd;
   params.events = events;
   params.socketfd = socketfd;
-  params.login = login;
-  params.fLogin = fLogin;
+  params.userParams = userParams;
   pthread_t working[WORKING_THREADS_COUNT]; 
   for(int i = 0; i<WORKING_THREADS_COUNT; i++){   
     pthread_create(&working[i], NULL, workThread, &params);
