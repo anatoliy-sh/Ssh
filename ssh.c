@@ -131,8 +131,8 @@ int acceptConnection(int epollfd, int socketfd, struct UserParams userParams){
 }
 //проверка введенных пользовательских данных
 int checkLogin(const char *login, char * password){
-  printf("%s\n", login);
-  printf("%s\n", password);
+  printf("Login = %s\n", login);
+  printf("Password = %s\n", password);
   FILE *mf;
   char *estr;
   char str[50];
@@ -143,16 +143,14 @@ int checkLogin(const char *login, char * password){
       break;
   
     if (!strcmp(str, login)){
-      fclose(mf);
-      return 1;
+      estr = fgets(str,50,mf);
+      if (!strcmp(str, password)){
+        fclose(mf);
+        return 1;
+       }
     }
-
-    estr = fgets(str,50,mf);
-
-    if (!strcmp(str, password)){
-      fclose(mf);
-      return 1;
-    }
+    else
+      estr = fgets(str,50,mf);
   }
   fclose(mf);
   return 0;
