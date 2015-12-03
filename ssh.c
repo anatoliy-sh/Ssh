@@ -151,7 +151,7 @@ int checkLogin(const char *login, char * password){
   fclose(mf);
   return 0;
 }
-int handlerRequest(int epollfd, int connectionfd, Dict login, Dict fLogin){
+int handlerRequest(int epollfd, int connectionfd, Dict login, Dict fLogin, pthread_mutex_t mutex){
 
   char buffer[1024];
   char conBuf[4];
@@ -186,7 +186,9 @@ int handlerRequest(int epollfd, int connectionfd, Dict login, Dict fLogin){
           char *tmpPass=(char*) malloc(count+1); 
           strncpy(tmpPass, buffer, count);
           tmpPass[count] = '\0';
+          pthread_mutex_lock(&mutex);
           int check = checkLogin(DictSearch(login, conBuf), tmpPass);
+          pthread_mutex_unlock(&mutex);
           if(check == 1){
             DictDelete(fLogin,conBuf);
             DictInsert(fLogin,conBuf,"1");
@@ -216,17 +218,15 @@ int handlerRequest(int epollfd, int connectionfd, Dict login, Dict fLogin){
           }   
           pclose(pp);
 
-          printf("%d user message: %.*s", connectionfd, count, buffer); 
+          printf("%d user command: %.*s", connectionfd, count, buffer); 
           dprintf(connectionfd, "Enter command: ");
         }
         }
       }
   }
-  printf("connection %d closed\n", connectionfd);
-  close(connectionfd);
 }
 
-int handleEvent(struct epoll_event* event, int epollfd, int socketfd, Dict login, Dict fLogin){
+int handleEvent(struct epoll_event* event, int epollfd, int socketfd, Dict login, Dict fLogin, pthread_mutex_t mutex){
   if ((event->events & EPOLLERR) || (event->events & EPOLLHUP)){
     printf("impossible to handle event\n");
     close(event->data.fd);
@@ -235,7 +235,7 @@ int handleEvent(struct epoll_event* event, int epollfd, int socketfd, Dict login
   return socketfd == event->data.fd ?
          acceptConnection(epollfd, socketfd, login, fLogin) : 
 
-         handlerRequest(epollfd, event->data.fd, login, fLogin);
+         handlerRequest(epollfd, event->data.fd, login, fLogin, mutex);
 
 }
 
@@ -270,9 +270,8 @@ void* workThread(void* p){
     if(flag){
     printf("handling event %d of %d\n", params->currrent, params->end);
     printf("%d\n",cur );
-    handleEvent(params->events+cur, params->epollfd, params->socketfd, params->login, params->fLogin);
-    }//int eventsNumber = epoll_wait(epollfd, events, maxEventNum, -1);
-   //handleEvent(params);
+    handleEvent(params->events+cur, params->epollfd, params->socketfd, params->login, params->fLogin, params->mutex);
+    }
   }
 
 }
