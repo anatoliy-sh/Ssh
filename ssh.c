@@ -159,17 +159,35 @@ int checkLogin(const char *login, char * password){
 }
 //чтение данных, присланных пользователем
 int handlerRequest(int epollfd, int connectionfd, struct UserParams userParams, pthread_mutex_t mutex){
-
-  char buffer[1024];
+  int buffCount = 1024;
+  int i = 3;
+  char *buffer = (char*) malloc(buffCount * sizeof(char));
   char conBuf[4];
   ssize_t count = read(connectionfd, buffer, sizeof buffer);
+  char *ret;
+  //динамическое выделение памяти для буфера
+  char bufferN[buffCount];
+  ssize_t countN = read(connectionfd, bufferN, sizeof bufferN);
+  while(countN > 0){
+    ret = (char*)realloc(buffer,i*buffCount*sizeof(char));
+    if(!ret){
+      perror("realloc");
+      exit(1);
+    }
+    strcat(buffer, bufferN);
+    count+=countN;
+    i++;
+    countN = read(connectionfd, bufferN, sizeof bufferN);
+  }
   switch(count){
     case -1:
       if (errno != EAGAIN)
         perror ("failed to read data");
+      free(buffer);
       break;
     case 0:
       printf("client closed the connection");
+      free(buffer);
       break;
     default:
       snprintf(conBuf, 4,"%d",connectionfd);
@@ -220,7 +238,7 @@ int handlerRequest(int epollfd, int connectionfd, struct UserParams userParams, 
           FILE *pp;
           extern FILE *popen();
           
-          if ( !(pp=popen(strcat(buffer, DictSearch(userParams.location, conBuf)), "r")) ) 
+          if ( !(pp=popen(buffer, "r")) ) 
             return 1;
  
           while ( (c=fgetc(pp)) != EOF ) {
@@ -236,10 +254,12 @@ int handlerRequest(int epollfd, int connectionfd, struct UserParams userParams, 
         }
       }
   }
+  free(buffer);
 }
 //обработка события на сокете
 int handleEvent(struct epoll_event* event, int epollfd, int socketfd, struct UserParams userParams, pthread_mutex_t mutex){
   if ((event->events & EPOLLERR) || (event->events & EPOLLHUP)){
+
     printf("impossible to handle event\n");
     close(event->data.fd);
     return -1;
